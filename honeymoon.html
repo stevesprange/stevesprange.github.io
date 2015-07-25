@@ -1,0 +1,621 @@
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/themes/css/cartodb.css">
+  <link rel="stylesheet" href="http://cartodb.github.io/odyssey.js/sandbox/css/slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div id="slides_container" style="display:block;">
+    <div id="dots"></div>
+
+    <div id="slides"></div>
+
+    <ul id="navButtons">
+      <li><a class="prev"></a></li>
+      <li><a class="next"></a></li>
+    </ul>
+  </div>
+
+  <div id="credits">
+    <span class="title" id="title">Title</span>
+    <span class="author"><strong id="author">By Name using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([0, 0.0], 4);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script type="text/template" id="md_template">```
+-baseurl: "https://2.maps.nlp.nokia.com/maptile/2.1/maptile/newest/normal.day/{z}/{x}/{y}/256/png8?lg=eng&token=A7tBPacePg9Mj_zghvKt9Q&app_id=KuYppsdXZznpffJsKT24"
+-title: "Steve and Emily's Honeymoon"
+-author: "stevesprange"
+```
+
+#The Ceremony
+```
+L.marker([37.7620, -122.4385]).actions.addRemove(S.map)
+- center: [52.8818, -1.3349]
+- zoom: 16
+L.marker([52.8818, -1.3349]).actions.addRemove(S.map)
+L.marker([52.8818, -1.3349]).actions.addRemove(S.map)
+```
+
+Married at 2pm, 2nd July 2015 at [St. Chad's Church](http://derbyshirechurches.org/church/wilne-st-chad), Wilne.
+
+Note - Once we have the professional photos from the day, I will expand this initial section out to include far more pictures and details..
+
+[![Emily's Entrance to Church](http://s5.postimg.org/dqgvzrw1j/IMG_1791.jpg)](http://s5.postimg.org/dqgvzrw1j/IMG_1791.jpg)
+[![Bridesmaids](http://s5.postimg.org/ypwzr9xpz/IMG_0387.jpg)](http://s5.postimg.org/ypwzr9xpz/IMG_0387.jpg)
+[![Best Men](http://s5.postimg.org/ho45p6iuv/IMG_0386.jpg)](http://s5.postimg.org/ho45p6iuv/IMG_0386.jpg)
+
+#The Reception
+```
+L.marker([53.0249, -1.5421]).actions.addRemove(S.map)
+- center: [53.0237, -1.5413]
+- zoom: 14
+```
+Reception held at [Shottle Hall](http://www.shottlehall.co.uk), in Derbyshire.
+
+[![Front of Hall](http://s5.postimg.org/o0nwcrbav/IMG_2010.jpg)](http://s5.postimg.org/o0nwcrbav/IMG_2010.jpg)
+[![Guest Tree](http://s5.postimg.org/ubt3t6cjb/IMG_0381.jpg)](http://s5.postimg.org/ubt3t6cjb/IMG_0381.jpg)
+[![Wedding Cake](http://s5.postimg.org/whnenofzr/IMG_0168.jpg)
+[![Afternoon Tea](http://s5.postimg.org/m5141lmgn/IMG_0383.jpg)](http://s5.postimg.org/m5141lmgn/IMG_0383.jpg)
+
+#Ready to go!
+```
+L.marker([52.4350, -1.6389]).actions.addRemove(S.map)
+- center: [52.4339, -1.6502]
+- zoom: 13
+```
+With the festivities finally over, we set off for Croatia by way of Birminham, and the [Manor Hotel](http://www.manorhotelmeriden.co.uk/), a lovely Best Western Hotel a few miles from the Airport. We were woken by the rather impressive thunderstorm in the early hours, but as we had a very early flight, it wasn't too annoying.
+
+[![Bath Robes](http://s5.postimg.org/rfao6mw3b/IMG_1810.png)](http://s5.postimg.org/rfao6mw3b/IMG_1810.png)
+[![Over Switzerland](http://s5.postimg.org/5jow875yv/IMG_0170.jpg)](http://s5.postimg.org/5jow875yv/IMG_0170.jpg)
+
+
+#We've Arrived!
+```
+L.marker([44.8952, 13.9183]).actions.addRemove(S.map)
+- center: [45.1268, 13.6670]
+- zoom: 9
+```
+
+
+We landed around 10am local time in the city of Pula, on the Southern tip of the Istrian Peninsula.
+
+
+#Porec
+###I - Around the Town
+```
+- center: [45.2222, 13.5983]
+- zoom: 16
+```
+After a smooth 45 minute coach ride from Pula, we arrived at [Porec](https://en.wikipedia.org/wiki/Pore%C4%8D), a typically gorgeous coastal town with endearing coloured buildings and traditional red rooves.
+[![WaterFront](http://s5.postimg.org/f7as0vshj/IMG_0307.jpg)](http://s5.postimg.org/f7as0vshj/IMG_0307.jpg)
+[![WaterFrontB](http://s5.postimg.org/5o137f4zb/IMG_0305.jpg)](http://s5.postimg.org/5o137f4zb/IMG_0305.jpg)
+There are few sandy beaches in Istria, so Porec has steps down into the sea at various points along its shore wall, allowing quick access to the water for swimmers.
+[![WaterFrontB](http://s5.postimg.org/6vjmddkhj/IMG_1830.jpg)](http://s5.postimg.org/6vjmddkhj/IMG_1830.jpg)
+Much of the area near the water is taken up by the old town, a network of narrow cobbled streets packed with shops selling local produce. Jewellery is very popular, but the main attractions are the regions specialities: lavender, truffles, prosciutto and wooden carvings.
+[![SquareAt](http://s5.postimg.org/7v9x92znb/IMG_1833.jpg)](http://s5.postimg.org/7v9x92znb/IMG_1833.jpg)
+[![SquareB](http://s5.postimg.org/nxcgfgzcn/IMG_1834.jpg)](http://s5.postimg.org/nxcgfgzcn/IMG_1834.jpg)
+Porec’s most famous attraction is the [Euphrasian Basilica](https://en.wikipedia.org/wiki/Euphrasian_Basilica/), a complex of buildings of various ages, some as old as the 6th Century. We sadly didn’t get time to have a look around it, but I did manage to get a picture of the wonderful golden relief above the main entrance.
+[![SquareB](http://s5.postimg.org/x2kt9c2rb/IMG_1914.jpg)](http://s5.postimg.org/x2kt9c2rb/IMG_1914.jpg)
+A few hundred meters over the water to the west of Porec is the island of Sveti Nikola (Saint Nicholas – yes, Father Christmas Island).
+[![OuttotheIsland](http://s5.postimg.org/gg8axdg53/P1010397.jpg)](http://s5.postimg.org/gg8axdg53/P1010397.jpg)
+This was to be our home for a week. And yes, I know the Odyssey map I’m using doesn’t have the Island on it, so I’ve included another map below that does.
+[![islanddoesexist](http://s5.postimg.org/xkbdbg2yf/island_map.jpg)](https://www.google.co.uk/maps/place/Pore%C4%8D,+Croatia/@45.2249252,13.5912928,16.27z/data=!4m2!3m1!1s0x477c979c94879029:0x7a9e5b587feaabd)
+
+#Porec
+###II - Eating Out
+```
+L.marker([45.2273, 13.5913]).actions.addRemove(S.map)
+L.marker([45.2283, 13.5923]).actions.addRemove(S.map)
+L.marker([45.2283, 13.5909]).actions.addRemove(S.map)
+- center: [45.2222, 13.5983]
+- zoom: 16
+```
+The Istrian Peninsula was owned for a number of centuries by Venice, and as such has a very Italian culture and cuisine. Local food can be summed by 5 words: pizza, pasta, barbecue, seafood and ice-cream. (You’re starting to realise why I like the place).
+We had 3 meals out in Porec over the holiday, 2 lunches and a dinner.
+On day 2 we went for our first proper exploration of Porec, having only quickly walked through it on the first day on the way to the boat to the Island. We ate lunch at the [Marconi](http://www.tripadvisor.co.uk/Restaurant_Review-g303829-d3297294-Reviews-Marconi-Porec_Istria.html), a small restaurant set in a secluded courtyard in the old town. I’d promised myself that I’d carefully document everything we ate over the holiday, and as you will see, failed pretty spectacularly most of the time. I enjoyed a local beer, Ozujsko, and had a pizza with prosciutto. The ham was suclent and came in huge, thinly cut pieces covering almost the entire surface. Em had pasta with a truffle sauce which smelled incredible. Truffles have a strong earthy smell that is quite unique, and to someone who has grown up in England quite unfamiliar. Both dishes were fantastic, and certainly would not mark the end to our truffle consumption.
+[![MarconiBeer](http://s5.postimg.org/snptk5q7r/IMG_0192.jpg)](http://s5.postimg.org/snptk5q7r/IMG_0192.jpg)
+Our second meal in Porec was on day 3, in the evening before our boat cruise. Our guidebook mentioned a popular restaurant named after the Island on which we were staying, and the Thompson rep had also recommended it. Encourage by this double endorsement, we found the [Sveti Nikola](http://www.svnikola.com/index.html), an upmarket eatery on the waterfront. We started with local wine pea based starter, following it with one of the evening’s specials, a seafood sharing platter with turbot, shrimp, mussels, and squid, served with potatoes. I remembered to get a picture when I was most of the way through mine, so the picture below doesn’t do it justice: it was truly fabulous! It marked my first ever eating of shrimp, and both Em and I trying mussels for the first time. All was excellent, and heartily devoured.
+[![Seafoodplatter](http://s5.postimg.org/u07im1nnb/IMG_1846.jpg)](http://s5.postimg.org/u07im1nnb/IMG_1846.jpg)
+For pudding, Emily had a chocolate ice cream with a raspberry compote and I had chocolate soufflé with truffle.
+[![SNEmpudding](http://s5.postimg.org/ltfiugxkn/IMG_1848.jpg)](http://s5.postimg.org/ltfiugxkn/IMG_1848.jpg)
+[![SNStevepudding](http://s5.postimg.org/xu0yv74zb/IMG_1849.jpg)](http://s5.postimg.org/xu0yv74zb/IMG_1849.jpg)
+Our final Porec meal was lunch on the Thursday (day six). We ate in the old town again, this time at the [San Mauro](http://www.tripadvisor.co.uk/Restaurant_Review-g303829-d8128353-Reviews-San_Mauro-Porec_Istria.html) (St. Mark, named for St. Mark’s square in Venice). We started with local humus and fresh bread, before having pizza with minced beef (Em) and steak and potatoes (me). Again I failed at properly photographing the food, only remembering halfway into the meal! The pictures do not do this lovely meal justice.
+[![SanMauroMenu](http://s5.postimg.org/40tymlgc7/IMG_1917.jpg)](http://s5.postimg.org/40tymlgc7/IMG_1917.jpg)[![SanMauroPizza](http://s5.postimg.org/qylbptzw7/IMG_1919.jpg)](http://s5.postimg.org/qylbptzw7/IMG_1919.jpg)[![SanMauroSteak](http://s5.postimg.org/l6gm4y0on/IMG_1918.jpg)](http://s5.postimg.org/l6gm4y0on/IMG_1918.jpg)
+
+#Our Hotel
+```
+- center: [45.2233, 13.5873]
+- zoom: 16
+L.marker([45.2233, 13.5873]).actions.addRemove(S.map)
+```
+
+###Sveti Nikola Island
+
+[![island map](http://s5.postimg.org/tm915rm5z/IMG_1995.jpg)](http://s5.postimg.org/tm915rm5z/IMG_1995.jpg)
+Just a few minutes from Porec lies the island of Sveti Nikola. Roughly a mile long and, at its broadest, about half that in width, the island protects the port from the open Adriatic. The entire island is one
+[resort](http://www.valamar.com/en/hotels-porec/valamar-isabella-island-resort)
+ and has several accommodation options. We stayed in the Isabella Hotel, a fairly standard (but very luxurious) family hotel. Other options include a stately home (even more luxury, but no balconies), villas and another hotel with suites. All guests on the island have the freedom to use any of the facilities, with the standard evening meal for example being a buffet of local produce served at the restaurant at our hotel. There are three other restaurants on the island, an Italian, a grill and a seafood place, all of which require making reservations and have limited places each evening.
+[![Hotelfront](http://s5.postimg.org/loa0qdjhz/IMG_0374.jpg)](http://s5.postimg.org/loa0qdjhz/IMG_0374.jpg)
+Our room was very comfortable, with a bed wider than I am tall and a huge (if somewhat strangely designed) bathroom. On arrival we were greeted by a swan and a peacock made of towels kissing on the bed, rose petals, canape deserts and a bottle of champagne. It's almost as if we'd told them we were on honeymoon...
+[![Bedwithtowels](http://s5.postimg.org/4c0hdgb93/Bed_A.jpg)](http://s5.postimg.org/4c0hdgb93/Bed_A.jpg)
+[![champagne](http://s5.postimg.org/4nhxq7rp3/Champ_B.jpg)](http://s5.postimg.org/4nhxq7rp3/Champ_B.jpg)
+We had a large balcony with a small garden on the end, and a fantastic view across the bay towards Porec.
+[![balconyviewday](http://s5.postimg.org/encu642yf/Balcony_D.jpg)](http://s5.postimg.org/encu642yf/Balcony_D.jpg)
+[![balconyviewevening](http://s5.postimg.org/85txmlsl3/IMG_0182.jpg)](http://s5.postimg.org/85txmlsl3/IMG_0182.jpg)
+[![balconyviewnight](http://s5.postimg.org/k1bmdnson/IMG_0205.jpg)](http://s5.postimg.org/k1bmdnson/IMG_0205.jpg)
+The resort is designed for both families and couples, so has a wide range of facilities and things to do. Nearest our hotel was the activity pool, aimed at kids and often used as a water polo pitch, it had slides (great fun), a whirlpool generator and a smaller toddler’s pool nearby. On the other side of the island, near to the stately house and suites was the relaxation area, a warm salt water infinity pool with Jacuzzi seats.
+[![activiypool](http://s5.postimg.org/nh8c0yfav/IMG_0308.jpg)](http://s5.postimg.org/nh8c0yfav/IMG_0308.jpg)
+[![relaxpool](http://s5.postimg.org/x0i0uf2t3/IMG_0323.jpg)](http://s5.postimg.org/x0i0uf2t3/IMG_0323.jpg)
+Aside from a small stretch of coastline, the beaches on the island are all rocky. This worked in our favour however as they were always very quiet, and had Wi-Fi, perfect for listening to the cricket whilst sunbathing. Most had flagstone surfaces with steps and ladders into the sea, so it was almost like being beside a pool. With little sand around, the sea was very clear and home to lots of coral and fish right up to the shore. All the beaches had penned off areas to stop boats coming too close, creating fantastic places to swim, snorkel and relax.
+[![eminrockpool](http://s5.postimg.org/3mqvskph3/IMG_1809.jpg)](http://s5.postimg.org/3mqvskph3/IMG_1809.jpg)
+[![beachrocks](http://s5.postimg.org/bb9xz2ltj/IMG_0176.jpg)](http://s5.postimg.org/bb9xz2ltj/IMG_0176.jpg)
+[![beachlegs](http://s5.postimg.org/q7m9bw1dj/IMG_1842.jpg)](http://s5.postimg.org/q7m9bw1dj/IMG_1842.jpg)
+[![sodyourswimmingskills](http://s5.postimg.org/8vhbcpiif/IMG_0217.jpg)](http://s5.postimg.org/8vhbcpiif/IMG_0217.jpg)
+[![selfie275](http://s5.postimg.org/5alfthdyv/IMG_1811.jpg)](http://s5.postimg.org/5alfthdyv/IMG_1811.jpg)
+[![sanservolo](http://s5.postimg.org/bjbd0t0xj/IMG_1837.jpg)](http://s5.postimg.org/bjbd0t0xj/IMG_1837.jpg)
+A large part of the island is forested, with little paths and tunnels of vegetation providing a fascinating area to explore, especially in the evening. Idling around the paths at night was a very romantic way to walk off the big dinners!
+[![menightpath](http://s5.postimg.org/9d7vetipj/IMG_0199.jpg)](http://s5.postimg.org/9d7vetipj/IMG_0199.jpg)
+[![emnightpath](http://s5.postimg.org/7w078hi47/IMG_1933.jpg)](http://s5.postimg.org/7w078hi47/IMG_1933.jpg)
+[![house1](http://s5.postimg.org/6akxgo7w7/P1010393.jpg)](http://s5.postimg.org/6akxgo7w7/P1010393.jpg)
+[![emhouse](http://s5.postimg.org/vrpjv1lh3/IMG_0202.jpg)](http://s5.postimg.org/vrpjv1lh3/IMG_0202.jpg)
+[![lighthouse](http://s5.postimg.org/69azn962f/P1010394.jpg)](http://s5.postimg.org/69azn962f/P1010394.jpg)
+[![eveningpath](http://s5.postimg.org/9h6a8tdkn/IMG_0331.jpg)](http://s5.postimg.org/9h6a8tdkn/IMG_0331.jpg)
+[![eveningsunset1](http://s5.postimg.org/wzcoeqqd3/IMG_0334.jpg)](http://s5.postimg.org/wzcoeqqd3/IMG_0334.jpg)
+[![eveningsunset2](http://s5.postimg.org/ylxam8d13/IMG_0338.jpg)](http://s5.postimg.org/ylxam8d13/IMG_0338.jpg)
+[![embeachnightrocks](http://s5.postimg.org/uflmyds6v/P1010395.jpg)](http://s5.postimg.org/uflmyds6v/P1010395.jpg)
+[![morebachnightrocks](http://s5.postimg.org/kbwx28bg7/IMG_1941.jpg)](http://s5.postimg.org/kbwx28bg7/IMG_1941.jpg)
+[![selfie200430](http://s5.postimg.org/tkpwkv5kn/IMG_0343.jpg)](http://s5.postimg.org/tkpwkv5kn/IMG_0343.jpg)
+[![heartsunset](http://s5.postimg.org/6sg2wixh3/IMG_1940.jpg)](http://s5.postimg.org/6sg2wixh3/IMG_1940.jpg)
+[![hellofalotofrocksinit](http://s5.postimg.org/axhsqyghj/IMG_0353.jpg)](http://s5.postimg.org/axhsqyghj/IMG_0353.jpg)
+[![nightpam](http://s5.postimg.org/9g0xt514n/IMG_1815.jpg)](http://s5.postimg.org/9g0xt514n/IMG_1815.jpg)
+The hotel had live entertainment every night, sometimes with live bands at one of the bars, but also films at the outdoor cinema, and fireworks. During the day there was beach volley ball, basketball, bike hire (to either cycle around the island, or to take off the island and explore Porec) and boat hire of various types, from pedallos to small sailing boats.
+[![fireworks](http://s5.postimg.org/9ibmohq0n/IMG_0300.jpg)](http://s5.postimg.org/9ibmohq0n/IMG_0300.jpg)
+[![minigolf](http://s5.postimg.org/96u6bq9kn/IMG_0211.jpg)](http://s5.postimg.org/96u6bq9kn/IMG_0211.jpg)
+Whilst playing minigolf, I spotted a small lizard in the bushes. Here's the blurry photo I managed to get:
+[![lizard](http://s5.postimg.org/6w5az1dkn/IMG_1840.jpg)](http://s5.postimg.org/6w5az1dkn/IMG_1840.jpg)
+Unlike the mainland where the sounds of crickets dominates, the island is very peaceful, with occasional birdsong from these guys:
+[![bird](http://s5.postimg.org/xv4kgganr/IMG_1804.jpg)](http://s5.postimg.org/xv4kgganr/IMG_1804.jpg)
+[![cinema](http://s5.postimg.org/xmbl49n93/IMG_1838.jpg)](http://s5.postimg.org/xmbl49n93/IMG_1838.jpg)
+[![pedallo](http://s5.postimg.org/45msad247/IMG_0212.jpg)](http://s5.postimg.org/45msad247/IMG_0212.jpg)
+[![pool bar](http://s5.postimg.org/z7m9ic83b/IMG_0326.jpg)](http://s5.postimg.org/z7m9ic83b/IMG_0326.jpg)
+Here’s Em with the children’s club mascot, Mauro the hermit crab:
+[![emwithmauro](http://s5.postimg.org/6eeqwxddj/IMG_1925.jpg)](http://s5.postimg.org/6eeqwxddj/IMG_1925.jpg)
+And here’s the taxi boat that ran roughly 4 times an hour to Porec and back:
+[![taxiboat](http://s5.postimg.org/jno2jacqf/IMG_1997.jpg)](http://s5.postimg.org/jno2jacqf/IMG_1997.jpg)
+
+#Barbecue Cruise - (7/7/2015)
+```
+- center: [45.0786, 13.6421]
+- zoom: 14
+L.marker([45.0828, 13.6319]).actions.addRemove(S.map)
+```
+
+###Rovinj
+Our first proper excursion was a trip in a small (30ish passengers) boat. An hour down the coast south of Porec lies the picturesque
+[Rovinj](http://www.rovinj.co/), known as little Venice. The fabulous old town once stood on an island close to shore, but is now on an artificial peninsula.
+[![Rovinjfar](http://s5.postimg.org/5e08mye0n/image.jpg)](http://s5.postimg.org/5e08mye0n/image.jpg)
+[![Rovinjmedium](http://s5.postimg.org/vnlb5qzxz/image.jpg)](http://s5.postimg.org/vnlb5qzxz/image.jpg)
+[![Rovinjclose](http://s5.postimg.org/yvpsism7r/image.jpg)](http://s5.postimg.org/yvpsism7r/image.jpg)
+Our boat dropped us off around 11 for 2 hours free time. We immediately made a bee line for the church and bell tower that stand proudly on top of the hill of the old town. Tiny, winding streets lead everywhere, and one with particularly uneven cobbles snaked off in roughly the direction we wanted to go. The walk up the hill takes you past lots of small, quirky shops, and reminded me a little of the hill in Lincoln that leads down to the Castle and Cathedral.
+[![marketplace](http://s5.postimg.org/i9889pt9z/image.jpg)](http://s5.postimg.org/i9889pt9z/image.jpg)
+[![topselfie](http://s5.postimg.org/tt8go0cxj/image.jpg)](http://s5.postimg.org/tt8go0cxj/image.jpg)
+[![viewfromtop](http://s5.postimg.org/ucdjxa4c7/image.jpg)](http://s5.postimg.org/ucdjxa4c7/image.jpg)
+Like so many of the old towns of Istria, the bell tower is tall and square, and visible from miles around.
+[![belltower](http://s5.postimg.org/6mo48l5yv/image.jpg)](http://s5.postimg.org/6mo48l5yv/image.jpg)
+[![viewfromtop2](http://s5.postimg.org/6cglp8rcn/image.jpg)](http://s5.postimg.org/6cglp8rcn/image.jpg)
+After the old town and a little shopping, we headed into the newer part of town to browse the market and find an ice cream (it was incredibly hot), before wandering around the harbour, and returning to the boat for lunch.
+[![harbour1](http://s5.postimg.org/46mauqnw7/image.jpg)](http://s5.postimg.org/46mauqnw7/image.jpg)
+[![habour2](http://s5.postimg.org/97ya9ukqf/P1010413.jpg)](http://s5.postimg.org/97ya9ukqf/P1010413.jpg)
+Rovinj is a beautiful place, one of the most unique places I’ve been, and will last long in the memory. As it turns out though, it was a long way from being the only beautiful place that we would visit…
+
+
+#Barbecue Cruise - (7/7/2015)
+```
+- center: [45.1172, 13.6289]
+- zoom: 13
+L.marker([45.0826, 13.6330]).actions.addRemove(S.map)
+L.marker([45.1535, 13.6098]).actions.addRemove(S.map)
+L.marker([45.1350, 13.6699]).actions.addRemove(S.map)
+```
+
+###Lunch, the Pirate Cave and Vrsar
+Before leaving Rovinj I managed to buy the one souvenir that I’d always planned on getting from Croatia: a football shirt!
+[![footballshirt](http://s5.postimg.org/daxb0fss7/IMG_1867.jpg)](http://s5.postimg.org/daxb0fss7/IMG_1867.jpg)
+Upon setting sail from Rovinj the crew served lunch, barbecued fish (freshly caught that day) and chicken with hearty homemade bread and coleslaw. I went for the mackerel:
+[![mydinner](http://s5.postimg.org/vcgfy8mt3/image.jpg)](http://s5.postimg.org/vcgfy8mt3/image.jpg)
+And Em had the chicken:
+[![emsdinner](http://s5.postimg.org/inm5ekgon/image.jpg)](http://s5.postimg.org/inm5ekgon/image.jpg)
+A flock of sea gulls followed the boat, and fought over the fish heads and left overs that the crew and some passengers threw into the sea, but didn’t try and come into the boat. The closest they got was having a break from flying by toddling around on the roof above us:
+[![gulls](http://s5.postimg.org/x2zgzq4c7/IMG_1858.jpg)](http://s5.postimg.org/x2zgzq4c7/IMG_1858.jpg)
+From Rovinj the boat head back northwards, taking a detour down the impressive
+[Lim Fjord](http://www.rovinj-online.net/limski-kanal-lim-fjord?lang=hr).
+[![forestsidesoffjord](http://s5.postimg.org/7121dftdj/P1010416.jpg)](http://s5.postimg.org/7121dftdj/P1010416.jpg)
+Our boat went as far down as the famous
+[Pirate Cave](http://www.piratecave.net/gallery_location.php). We didn’t stop, but slowed down so to have a good look (I wouldn’t have fancied the walk up to the cave, it was far too hot!).
+[![piratecave](http://s5.postimg.org/ddh6n9wfr/Pirate_Cave_A.jpg)](http://s5.postimg.org/ddh6n9wfr/Pirate_Cave_A.jpg)
+Once we excited the Fjord we again headed north, this time to the town of Vrsar. Here we had planned to have a wander around and hadn’t taken swimming stuff, but were so hot I bought some swim shorts and Em got a cheap bikini and we headed for the beach! Vrsar looked nice (what little we saw of it), but definitely wasn’t as impressive as Rovinj, so we didn’t miss out.
+[![leavingvrsar](http://s5.postimg.org/765sn40on/IMG_1865.jpg)](http://s5.postimg.org/765sn40on/IMG_1865.jpg)
+On the final leg of the journey, several crew members entertained us with some local songs, and some covers of an eclectic mix of more well-known tunes.
+[![singingpic](http://s5.postimg.org/bcv8g6po7/screengrabofvideoforweb.jpg)](http://stevesprange.tumblr.com/post/124747190727/on-boat-from-rovinj-to-vrsar)
+[![islands](http://s5.postimg.org/te9s08ubb/P1010421.jpg)](http://s5.postimg.org/te9s08ubb/P1010421.jpg)
+
+#Venice - (8/7/2015)
+```
+L.marker([45.2319, 13.5928]).actions.addRemove(S.map)
+L.marker([45.4307, 12.3376]).actions.addRemove(S.map)
+- center: [45.2879, 12.6439]
+- zoom: 10
+```
+The Istrian Peninsula is not far from Italy. It’s a two hour journey by a fast boat across the Adriatic, and it’s not that much longer if you drive. This is why Italy, and particularly Venice with their strong navy, ruled Istria for so long, and offered us the chance to visit Venice for the day, an opportunity that we were very keen to make the most of! We started queuing for our catamaran at 7.
+[![queingforwrongboat](http://s5.postimg.org/5rdepved3/image.jpg)](http://s5.postimg.org/5rdepved3/image.jpg)
+The only problem was, the boat in the picture above turned out to not be the one we were booked on, so a long wait in the morning sun commenced. It might have been early morning, but the heat was getting strong, and a couple of people in the queue fainted. Luckily, Doctor Emily sprang into action and saved the day. Eventually, our actual boat turned up.
+[![correctboat](http://s5.postimg.org/usjsein3r/image.jpg)](http://s5.postimg.org/usjsein3r/image.jpg)
+The tour was run by the HelloVenezia Company, and in a moment of foresight, I covered up the last 4 letters of their logo to form the words Hell Oven. This proved to be very apt for later in the day.
+[![hellovenezia](http://s5.postimg.org/6fm98td2v/B_On_Catamaran_1.jpg)](http://s5.postimg.org/6fm98td2v/B_On_Catamaran_1.jpg)
+Upon arrival we caught a taxi boat from the port of Venice to a dock close to the centre of the city. From there it was a short walk to the
+[Piazza San Marco](https://en.wikipedia.org/wiki/Piazza_San_Marco)
+.
+[![eminsquare](http://s5.postimg.org/jzca605tj/P1010434.jpg)](http://s5.postimg.org/jzca605tj/P1010434.jpg)
+The Piazza is the centre of Venice, and it’s most famous tourist location and stands in front of
+[Saint Mark's Basilica](https://en.wikipedia.org/wiki/St_Mark%27s_Basilica). We managed to get inside the Basilica without queuing for too long, and then wandered around the small streets near the Piazza to find some lunch.
+[![Dinner](http://s5.postimg.org/kkwnodbhz/IMG_1895.jpg)](http://s5.postimg.org/kkwnodbhz/IMG_1895.jpg)
+[![Beer](http://s5.postimg.org/4le04tfg7/IMG_1915.jpg)](http://s5.postimg.org/4le04tfg7/IMG_1915.jpg)
+After that we meandered around, sticking to the shade where possible, visiting the occasional shop, and spotting many world famous sights including the Bridge of Sighs:
+[![sighsselfie](http://s5.postimg.org/8b91jz1x3/IMG_1894.jpg)](http://s5.postimg.org/8b91jz1x3/IMG_1894.jpg)
+[![sighsclose](http://s5.postimg.org/da5qpzkhj/P1010430.jpg)](http://s5.postimg.org/da5qpzkhj/P1010430.jpg)
+[![sighsotherside](http://s5.postimg.org/yh9hdzx4n/Sighs_C.jpg)](http://s5.postimg.org/yh9hdzx4n/Sighs_C.jpg)
+and the Grand Canal:
+[![grand1](http://s5.postimg.org/uxiyag513/IMG_1898.jpg)](http://s5.postimg.org/uxiyag513/IMG_1898.jpg)
+[![grand2](http://s5.postimg.org/55t17i8on/IMG_1900.jpg)](http://s5.postimg.org/55t17i8on/IMG_1900.jpg)
+[![bridge](http://s5.postimg.org/bw4x376gn/IMG_0255.jpg)](http://s5.postimg.org/bw4x376gn/IMG_0255.jpg)
+[![viewfromrealtovridge](http://s5.postimg.org/laaumzmnr/IMG_0256.jpg)](http://s5.postimg.org/laaumzmnr/IMG_0256.jpg)
+[![sighsdistance](http://s5.postimg.org/4u6zh02uv/IMG_1893.jpg)](http://s5.postimg.org/4u6zh02uv/IMG_1893.jpg)
+[![chruch1](http://s5.postimg.org/oxv76sk8n/IMG_1901.jpg)](http://s5.postimg.org/oxv76sk8n/IMG_1901.jpg)
+[![anothercanal](http://s5.postimg.org/r3pi1anp3/IMG_1896.jpg)](http://s5.postimg.org/r3pi1anp3/IMG_1896.jpg)
+For the final part of our visit, we took another taxi boat for a panoramic tour of the other islands, and main sights.
+[![cruiseshiup](http://s5.postimg.org/td4fkkhvb/image.jpg)](http://s5.postimg.org/td4fkkhvb/image.jpg)
+[![viewfromtaxio](http://s5.postimg.org/72gkklkl3/image.jpg)](http://s5.postimg.org/72gkklkl3/image.jpg)
+[![eltonjohnshouse](http://s5.postimg.org/q6j2sfc6v/IMG_1905.jpg)](http://s5.postimg.org/q6j2sfc6v/IMG_1905.jpg)
+The above is Elton John’s Venetian House, one of the few houses in the city to have a garden. The below is a huge Spaghetti factory that, despite being in Italy, was so badly run it managed to go bust in the 20th Century.
+[![spaghetti](http://s5.postimg.org/o0orxx8qf/IMG_1906_2.jpg)](http://s5.postimg.org/o0orxx8qf/IMG_1906_2.jpg)
+[![island](http://s5.postimg.org/gs8juw6lz/IMG_0260.jpg)](http://s5.postimg.org/gs8juw6lz/IMG_0260.jpg)
+[![parkisland](http://s5.postimg.org/4jzgxno8n/IMG_0265.jpg)](http://s5.postimg.org/4jzgxno8n/IMG_0265.jpg)
+[![taxistmarks](http://s5.postimg.org/j4gjshj7b/IMG_0268.jpg)](http://s5.postimg.org/j4gjshj7b/IMG_0268.jpg)
+[![taxistmarkscloseer](http://s5.postimg.org/b1rk8nddj/P1010429.jpg)](http://s5.postimg.org/b1rk8nddj/P1010429.jpg)
+[![church2](http://s5.postimg.org/mya01n0jb/IMG_1892.jpg)](http://s5.postimg.org/mya01n0jb/IMG_1892.jpg)
+We also passed the
+[Cipriani Hotel](http://www.belmond.com/hotel-cipriani-venice/luxury-hotel-venice), one of the most expensive hotels in the world, and owners of the only swimming pool in all of Venice (and before you mention the canals, swimming in all is forbidden). Sadly I missed my chance to get a photo, but it looked incredible.
+[![housesfromtaxi](http://s5.postimg.org/fnj3399iv/IMG_1899.jpg)](http://s5.postimg.org/fnj3399iv/IMG_1899.jpg)
+[![chruch3](http://s5.postimg.org/ym8n9xf1z/IMG_1904.jpg)](http://s5.postimg.org/ym8n9xf1z/IMG_1904.jpg)
+[![aothertaxipic](http://s5.postimg.org/u5kvozq7r/P1010426.jpg)](http://s5.postimg.org/u5kvozq7r/P1010426.jpg)
+Em and I loved Venice, though we did have issues with how hot it was. Venice’s lagoon means that the city is more humid than it otherwise would be, and I really struggled because of this. The heat wave that England was having whilst we were away was amplified in Croatia, but even that was nothing compared to Venice. Whilst we enjoyed our time there, we were very glad to be back on our catamaran and heading home. That was until we saw the lightening of the storm that would dominate our journey home. The sea had been very smooth on the journey over, but was incredibly rough on the way back, and a good proportion of the passengers (including me) were very much worse for wear. We only found later that the storm had actually been caused by a
+[tornado](http://www.bbc.co.uk/news/world-europe-33456741)
+ which we were obviously very relieved to have not known about at the time!
+
+#Parenzana Train - (10/7/2015)
+```
+- center: [45.2595, 13.6691]
+- zoom: 12
+L.marker([45.2767, 13.7199]).actions.addRemove(S.map)
+L.marker([45.3293, 13.7576]).actions.addRemove(S.map)
+L.marker([45.3057, 13.8033]).actions.addRemove(S.map)
+```
+
+###Visnjan, then Vizinada to Rakotule 
+On our last day we took a trip inland to visit [Motovun](https://en.wikipedia.org/wiki/Motovun), one of the old towns in the region. We travelled from Porec by coach to Vizinada, a small village where the film 
+[Kelly's Heroes](http://www.imdb.com/title/tt0065938/?ref_=ttloc_loc_tt)
+ was filmed. Just before we arrived, we passed through the town of Visnjan which has a large 
+[observatory](http://www.astro.hr/). Vizinada used to be linked to Motovun by a narrow gauge railway that reached as far north as Trieste in Italy. The track is long gone, removed by Mussolini to use for a railway in Italy’s African colonies, but the route still remains in the form of a gravel path, much like the Tissington trail in Derbyshire. The path is wide enough for one vehicle to go down, and we travelled to Motovun by the 
+[Parenzana Tourist Train](http://www.parenzana.hr/en/the-route-of-veli-joze). The “train” was a fantastic way to travel through the forest on the edge of the valley, quick enough to be better than walking, but still slow and comfortable enough to take in the amazing landscape.
+[![trainfront](http://s5.postimg.org/79fuy9xtj/image.jpg)](http://s5.postimg.org/79fuy9xtj/image.jpg)
+[![trainside](http://s5.postimg.org/jvq9v40af/image.jpg)](http://s5.postimg.org/jvq9v40af/image.jpg)
+Motovun itself sits on a hill in the middle of the river valley, and was visible for most of our journey:
+[![motovunfardistance](http://s5.postimg.org/47khakvav/P1010436.jpg)](http://s5.postimg.org/47khakvav/P1010436.jpg)
+The rest of the valley is incredibly green, and is the main source in the region for both wine grapes and the world famous Istrian truffles.
+[![valleyatstart](http://s5.postimg.org/8xf0cxbp3/P1010440.jpg)](http://s5.postimg.org/8xf0cxbp3/P1010440.jpg)
+[![motovunagain](http://s5.postimg.org/c5jhpyxyv/P1010441.jpg)](http://s5.postimg.org/c5jhpyxyv/P1010441.jpg)
+The railway crosses several viaducts, including this, one of the tallest.
+[![viaduct](http://s5.postimg.org/41bdl8bjr/P1010447.jpg)](http://s5.postimg.org/41bdl8bjr/P1010447.jpg)
+[![viewfromviaduct](http://s5.postimg.org/t9w7ewghj/P1010448.jpg)](http://s5.postimg.org/t9w7ewghj/P1010448.jpg)
+We stopped at Rakotule, a village where one of the old stations used to be. There the locals put on a buffet brunch with many samples of local delicacies, with cheeses, hams, breads and wine on offer, as well as stalls selling souvenirs and truffles.
+[![stationsign](http://s5.postimg.org/jhyl6dbw7/IMG_1958.jpg)](http://s5.postimg.org/jhyl6dbw7/IMG_1958.jpg)
+[![stationfood](http://s5.postimg.org/ilx1tsvw7/IMG_1947.jpg)](http://s5.postimg.org/ilx1tsvw7/IMG_1947.jpg)
+After the meal we each were presented with a gift, a ceramic jug containing the traditional drink to present to guests, a red wine with sugar and herby croutons floating in it. Whilst we appreciated the hospitality, both Em and I found the drink a little strong for our tastes!
+[![winewithbreadandsugar](http://s5.postimg.org/j52532nav/IMG_1956.jpg)](http://s5.postimg.org/j52532nav/IMG_1956.jpg)
+[![winepot](http://s5.postimg.org/96h6gldvb/IMG_1957.jpg)](http://s5.postimg.org/96h6gldvb/IMG_1957.jpg)
+There was a fabulous view of the whole valley, including Motovun from the station.
+[![motovunfromstationwithpeople](http://s5.postimg.org/b3dwl64jb/IMG_1946.jpg)](http://s5.postimg.org/b3dwl64jb/IMG_1946.jpg)
+[![motovunfromstation](http://s5.postimg.org/gg2qzasfr/IMG_1953.jpg)](http://s5.postimg.org/gg2qzasfr/IMG_1953.jpg)
+Just before we left, the driver of our train pulled out an accordion and sang a few traditional songs.
+[![stationmusoc](http://s5.postimg.org/r4bjv98qf/stationvideofrontpic.jpg)](http://stevesprange.tumblr.com/post/124994188316/ratokule-station-paranzana-train-istria-croatia)
+There was also a small pen at the station with two donkeys, rabbits, chickens and ducks.
+[![bothdonkoeys](http://s5.postimg.org/5x2ra4prr/IMG_0361.jpg)](http://s5.postimg.org/5x2ra4prr/IMG_0361.jpg)
+[![onedonkey](http://s5.postimg.org/hngoriik7/IMG_1945.jpg)](http://s5.postimg.org/hngoriik7/IMG_1945.jpg)
+[![chickens](http://s5.postimg.org/ohqzh7b7b/IMG_1951.jpg)](http://s5.postimg.org/ohqzh7b7b/IMG_1951.jpg)
+
+
+#Parenzana Train - (10/7/2015)
+```
+- center: [45.2595, 13.6691]
+- zoom: 12
+L.marker([45.3093, 13.8054]).actions.addRemove(S.map)
+L.marker([45.3366, 13.8270]).actions.addRemove(S.map)
+```
+
+
+
+###Rakotule to Motovun 
+
+After brunch we hopped back on the train and set off once again down the trail. We were still travelling around the edge of the valley, but getting closer and closer to Motovun.
+[![gettingclose](http://s5.postimg.org/fo9qayjxz/P1010452.jpg)](http://s5.postimg.org/fo9qayjxz/P1010452.jpg)
+[![gettingcloser](http://s5.postimg.org/7wt0cefsn/P1010462.jpg)](http://s5.postimg.org/7wt0cefsn/P1010462.jpg)
+[![gettingevencloser](http://s5.postimg.org/8lfn0kinr/P1010493.jpg)](http://s5.postimg.org/8lfn0kinr/P1010493.jpg)
+[![motovuntrainstop](http://s5.postimg.org/5zwa7tp4n/IMG_1960.jpg)](http://s5.postimg.org/5zwa7tp4n/IMG_1960.jpg)
+As the valley became shallower, we turned inwards and arrived at the foot of the hill upon which Motovun stands. This was the end of our train journey as we swapped it for a local shuttle bus. This took us to the edge of the old town, and from there we walked the final few hundred feet to the top. Motovun has been a Roman garrison, a Venetian town and an Austrian outpost in the past, and each ruling dynasty has left its mark, especially with the various gates that we travelled through as we walked up the winding road.
+[![motovunvideo](http://s5.postimg.org/4h0w2uik7/guidetalkfrontpic.jpg)](http://stevesprange.tumblr.com/post/124996904861)
+[![walkup](http://s5.postimg.org/cp2tnuagn/IMG_1963.jpg)](http://s5.postimg.org/cp2tnuagn/IMG_1963.jpg)
+Motovun is famous for its truffles and wine which are sold in small shops that line the road to the top. The summit itself is dominated by the Church of Sveti Stjepan (Saint Stephen!) and the town hall, which together form two sides of the main square.
+[![churchsquare1](http://s5.postimg.org/b2i7gcnsn/IMG_1965.jpg)](http://s5.postimg.org/b2i7gcnsn/IMG_1965.jpg)
+[![churchsquare2](http://s5.postimg.org/t7zr85con/P1010469.jpg)](http://s5.postimg.org/t7zr85con/P1010469.jpg)
+[![churhc](http://s5.postimg.org/3rrahyws7/P1010489.jpg)](http://s5.postimg.org/3rrahyws7/P1010489.jpg)
+[![ststevesplaque](http://s5.postimg.org/5bs12mfsn/IMG_1966.jpg)](http://s5.postimg.org/5bs12mfsn/IMG_1966.jpg)
+[![churchsquarerestaurant](http://s5.postimg.org/sjmbbgol3/IMG_1968.jpg)](http://s5.postimg.org/sjmbbgol3/IMG_1968.jpg)
+On the wall of the town hall are plaques that commemorate two of Motovun’s three famous historical sons / residents (I’ll mention the third below). The first is 
+[Andrea Antico ](https://en.wikipedia.org/wiki/Andrea_Antico)
+ who was one of the first people to print reliable sheet music in the world. The other is 
+[Josef Ressel](https://en.wikipedia.org/wiki/Josef_Ressel)
+ who, inspired by the works of people like Archimedes and Da Vinci, invented the first working boat propeller. After nipping in the church, we walked around the oldest town walls, taking in the incredible view of the surrounding valley.
+[![wallview1](http://s5.postimg.org/x2yjwz6gn/IMG_0367.jpg)](http://s5.postimg.org/x2yjwz6gn/IMG_0367.jpg)
+[![wallview2](http://s5.postimg.org/hexcq6quv/IMG_0368.jpg)](http://s5.postimg.org/hexcq6quv/IMG_0368.jpg)
+[![wallview3](http://s5.postimg.org/mwpydzm2f/IMG_0371.jpg)](http://s5.postimg.org/mwpydzm2f/IMG_0371.jpg)
+[![wallview4](http://s5.postimg.org/aw4id9enr/IMG_1978.jpg)](http://s5.postimg.org/aw4id9enr/IMG_1978.jpg)
+[![wallview5](http://s5.postimg.org/6o9q4id87/IMG_1979.jpg)](http://s5.postimg.org/6o9q4id87/IMG_1979.jpg)
+[![wallview6](http://s5.postimg.org/qk5pk1u9j/IMG_1981.jpg)](http://s5.postimg.org/qk5pk1u9j/IMG_1981.jpg)
+[![wallview7](http://s5.postimg.org/t99p1keif/P1010471.jpg)](http://s5.postimg.org/t99p1keif/P1010471.jpg)
+From the wall, more of the old town was visible.
+[![wallviewofofoldtown](http://s5.postimg.org/52z1qfsdz/IMG_1983.jpg)](http://s5.postimg.org/52z1qfsdz/IMG_1983.jpg)
+[![wallviewofofoldtown2](http://s5.postimg.org/gygqhhshj/P1010481.jpg)](http://s5.postimg.org/gygqhhshj/P1010481.jpg)
+[![wallviewofofoldtown3](http://s5.postimg.org/dhj9s9it3/P1010484.jpg)](http://s5.postimg.org/dhj9s9it3/P1010484.jpg)
+Whilst looking down at the old town, our guide pointed out another building with a plaque. The house was the birthplace and childhood home of 1978 Formula One World Champion, 
+[Mario Andretti ](https://en.wikipedia.org/wiki/Mario_Andretti)
+.
+[![marioandrettihouse](http://s5.postimg.org/cqly8qr1z/P1010486.jpg)](http://s5.postimg.org/cqly8qr1z/P1010486.jpg)
+The walls enclosed the grounds of the church, in which a large hay statue had been placed. Each year the locals build one to celebrate the legend of 
+["Big John"](https://hr.wikipedia.org/wiki/Veli_Jo%C5%BEe)
+ a figure of legend and character from a piece of classic Croatian Literature. Some of the buildings in the old town have murals that also depict him.
+[![churchground](http://s5.postimg.org/yja2f49dj/IMG_0369.jpg)](http://s5.postimg.org/yja2f49dj/IMG_0369.jpg)
+After wandering round we finished the trip with a drink and an ice cream in a restaurant near the top with yet another incredible view, before wandering around the shops (and buying some truffles).
+[![lunchrestaurant](http://s5.postimg.org/o05hc7hbr/IMG_1964.jpg)](http://s5.postimg.org/o05hc7hbr/IMG_1964.jpg)
+[![lunchbeer](http://s5.postimg.org/klwhnk0on/IMG_1990.jpg)](http://s5.postimg.org/klwhnk0on/IMG_1990.jpg)
+[![lunchbananasplit](http://s5.postimg.org/mp6wv80hj/IMG_1991.jpg)](http://s5.postimg.org/mp6wv80hj/IMG_1991.jpg)
+[![lunchemicecream](http://s5.postimg.org/8lb1mtt9z/IMG_1993.jpg)](http://s5.postimg.org/8lb1mtt9z/IMG_1993.jpg)
+We absolutely loved Motovun, and the setting is definitely one of the most visually stunning places I’ve been. It was a lovely way to end the holiday, and we had time in the afternoon to dip in the pool at the hotel, before going for our final meal. Croatia is an incredible country, with interesting culture, fantastic food, the friendliest people and was everything we could have asked for. We’ll definitely be going again, and it will always remain in our memories as our first holiday as a married couple.
+[![goodbyecroatia](http://s5.postimg.org/b0h5vuulz/IMG_0347.jpg)](http://s5.postimg.org/b0h5vuulz/IMG_0347.jpg)</script></body></html>
